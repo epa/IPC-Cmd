@@ -1,15 +1,15 @@
-## Tools::Cmd test suite ###
+## IPC::Cmd test suite ###
 
 use strict;
-use lib qw[../lib t/to_load];
+use lib qw[../lib lib to_load t/to_load];
 use File::Spec ();
 
 use Test::More tests => 8;
 
-use_ok( 'Tools::Cmd' ) or diag "Cmd.pm not found.  Dying", die;
+use_ok( 'IPC::Cmd' ) or diag "Cmd.pm not found.  Dying", die;
 
-*run        = *Tools::Cmd::run;
-*can_run    = *Tools::Cmd::can_run;
+*run        = *IPC::Cmd::run;
+*can_run    = *IPC::Cmd::can_run;
 
 {
     ok( can_run('perl'),                q[Found 'perl' in your path] );

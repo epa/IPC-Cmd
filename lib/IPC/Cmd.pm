@@ -14,7 +14,7 @@ BEGIN {
     use Exporter    ();
     use vars        qw[ @ISA $VERSION @EXPORT_OK $VERBOSE];
 
-    $VERSION    =   0.02;
+    $VERSION    =   0.03;
     $VERBOSE    =   0;
 
     @ISA        =   qw[ Exporter ];
