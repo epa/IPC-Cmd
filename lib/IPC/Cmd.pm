@@ -19,7 +19,7 @@ BEGIN {
                         $USE_IPC_RUN $USE_IPC_OPEN3
                     ];
 
-    $VERSION        = '0.22';
+    $VERSION        = '0.23';
     $VERBOSE        = 0;
     $USE_IPC_RUN    = 1;
     $USE_IPC_OPEN3  = 1;
@@ -45,7 +45,7 @@ sub can_run {
 
 
 ### Execute a command: $cmd may be a scalar or an arrayref of cmd and args
-### $bufout is an scalar ref to store outputs, $verbose can override conf
+### $bufout is a scalar ref to store outputs, $verbose can override conf
 sub run {
     my %hash = @_;
 
@@ -63,7 +63,10 @@ sub run {
                 or ( warn(loc(q[Could not validate input!])), return );
 
     ### Kludge! This enables autoflushing for each perl process we launched.
-    local $ENV{PERL5OPT} .= ' -MIPC::Cmd::System=autoflush=1';
+    ### XXX probably not really needed, and seems to throw quite a few
+    ### 'make test' etc off to have PERL5OPT set
+    #local $ENV{PERL5OPT} = ($ENV{PERL5OPT} || '') . 
+    #                            ' -MIPC::Cmd::System=autoflush=1';
 
     my $verbose     = $args->{verbose};
     my $is_win98    = ($^O eq 'MSWin32' and !Win32::IsWinNT());
@@ -317,7 +320,7 @@ IPC::Cmd - finding and running system commands made easy
 
 
     ### in list context ###
-    my( $succes, $error_code, $full_buf, $stdout_buf, $stderr_buf ) =
+    my( $success, $error_code, $full_buf, $stdout_buf, $stderr_buf ) =
             run( command => $cmd, verbose => 0 );
 
     if( $success ) {
@@ -332,8 +335,8 @@ IPC::Cmd - finding and running system commands made easy
 
 =head1 DESCRIPTION
 
-IPC::Cmd allows you to run commands, interactively if desisered,
-platform independant but have them still work.
+IPC::Cmd allows you to run commands, interactively if desired,
+platform independent but have them still work.
 
 The C<can_run> function can tell you if a certain binary is installed
 and if so where, whereas the C<run> function can actually execute any
@@ -345,10 +348,11 @@ as adhere to your verbosity settings.
 =head2 can_run
 
 C<can_run> takes but a single argument: the name of a binary you wish
-to locate. C<can_run> works much like the unix binary C<which>, which
-scans through your path, looking for the binary you asked for.
+to locate. C<can_run> works much like the unix binary C<which> or the bash
+command C<type>, which scans through your path, looking for the requested
+binary .
 
-Unlike C<which> however, this function is platform independant and
+Unlike C<which> and C<type>, this function is platform independent and
 will also work on, for example, Win32.
 
 It will return the full path to the binary you asked for if it was
@@ -385,7 +389,7 @@ This will hold all the output of a command. It needs to be a reference
 to a scalar.
 Note that this will hold both the STDOUT and STDERR messages, and you
 have no way of telling which is which.
-If you require this distinciton, run the C<run> command in list context
+If you require this distinction, run the C<run> command in list context
 and inspect the individual buffers.
 
 Of course, this requires that the underlying call supports buffers. See
@@ -485,7 +489,7 @@ when available and suitable. Defaults to true.
 =head2 $IPC::Cmd::USE_IPC_OPEN3
 
 This variable controls whether IPC::Cmd will try to use L<IPC::Open3>
-when available and suitable. Defautls to true.
+when available and suitable. Defaults to true.
 
 =head2 Caveats
 
@@ -499,7 +503,7 @@ command. Although this will usually just Do What You Mean, it may
 break if you have files or commands with whitespace in them. 
 
 If you do not wish this to happen, you should provide an array 
-reference, where all parts of your command are already seperated out.
+reference, where all parts of your command are already separated out.
 Note however, if there's extra or spurious whitespace in these parts,
 the parser or underlying code may not interpret it correctly, and
 cause an error.
