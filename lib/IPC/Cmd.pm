@@ -14,7 +14,7 @@ BEGIN {
     use Exporter    ();
     use vars        qw[ @ISA $VERSION @EXPORT_OK $VERBOSE];
 
-    $VERSION    =   0.03;
+    $VERSION    =   0.04;
     $VERBOSE    =   0;
 
     @ISA        =   qw[ Exporter ];
@@ -25,9 +25,14 @@ BEGIN {
 sub can_run {
     my $command = shift;
 
-    for my $dir (split /$Config{path_sep}/, $ENV{PATH}) {
-        my $abs = File::Spec->catfile($dir, $command);
-        return $abs if $abs = MM->maybe_command($abs);
+    if( File::Spec->file_name_is_absolute($command) ) {
+        return MM->maybe_command($command);
+    
+    } else {    
+        for my $dir (split /$Config{path_sep}/, $ENV{PATH}) {
+            my $abs = File::Spec->catfile($dir, $command);
+            return $abs if $abs = MM->maybe_command($abs);
+        }
     }
 }
 
@@ -37,18 +42,20 @@ sub can_run {
 sub run {
     my %hash = @_;
 
+    my $x = '';
     my $tmpl = {
         verbose => { default    => $VERBOSE },
         command => { required   => 1,
                      allow      => sub {!(ref $_[1]) or ref $_[1] eq 'ARRAY' }
                    },
+        buffer  => { default => \$x },             
     };
 
     my $args = check( $tmpl, \%hash, $VERBOSE )
                 or ( warn(loc(q[Could not validate input!])), return );
 
 
-
+    
 
 
     ### Kludge! This enables autoflushing for each perl process we launched.
@@ -86,7 +93,7 @@ sub run {
     my $cmd = $args->{command};
     my @cmd = ref ($cmd) ? grep(length, @{$cmd}) : $cmd;
 
-    print loc(qq|Running [%1]...|,"@cmd") if $verbose;
+    print loc(qq|Running [%1]...\n|,"@cmd") if $verbose;
 
     ### First, we prefer Barrie Slaymaker's wonderful IPC::Run module.
     if (!$is_win98 and can_load(
@@ -97,14 +104,14 @@ sub run {
 
         $have_buffer++;
 
-         @cmd = ref($cmd) ? ( [ @cmd ] )
+        @cmd = ref($cmd) ? ( [ @cmd ] )
                          : map { /[<>|&]/
                                     ? $_
                                     : [ split / +/ ]
                                } split( /\s*([<>|&])\s*/, $cmd );
-         IPC::Run::run(@cmd, \*STDIN, $_out_handler, $_err_handler) or $err++;
-
-
+        
+        IPC::Run::run(@cmd, \*STDIN, $_out_handler, $_err_handler) or $err++;
+        
     ### Next, IPC::Open3 is know to fail on Win32, but works on Un*x.
     } elsif (   $^O !~ /^(?:MSWin32|cygwin)$/
                 and can_load(
@@ -145,7 +152,12 @@ sub run {
 
     ### unless $err has been set from _open3_run, set it to $? ###
     $err ||= $?;
-
+    
+    if ( scalar @buffer ) {
+        my $capture = $args->{buffer};
+        $$capture = join '', @buffer;
+    }
+    
     return wantarray
                 ? $have_buffer
                     ? (!$err, $?, \@buffer, \@bufout, \@buferr)
