@@ -13,7 +13,7 @@ use_ok( 'IPC::Cmd' ) or diag "Cmd.pm not found.  Dying", die;
 IPC::Cmd->import( qw[can_run run] );
 
 ### silence it ###
-local $IPC::Cmd::VERBOSE = $ARGV[0] ? 1 : 0;
+$IPC::Cmd::VERBOSE = $IPC::Cmd::VERBOSE = $ARGV[0] ? 1 : 0;
 
 {
     ok( can_run('perl'),                q[Found 'perl' in your path] );
@@ -23,15 +23,15 @@ local $IPC::Cmd::VERBOSE = $ARGV[0] ? 1 : 0;
 
 {   ### list of commands and regexes matching output ###
     my $map = [
-        ["$^X -v",                           qr/larry\s+wall/i, ], 
-        [[$^X, '-v'],                        qr/larry\s+wall/i, ],
-        ["echo 1 | $^X -neprint",            qr/1/,             ],
-        [[qw[echo 1 |], $^X, qw|-neprint|],  qr/1/,             ],
+        ["$^X -v",                                  qr/larry\s+wall/i, ], 
+        [[$^X, '-v'],                               qr/larry\s+wall/i, ],
+        ["$^X -eprint1 | $^X -neprint",             qr/1/,             ],
+        [[$^X,qw[-eprint1 |], $^X, qw|-neprint|],   qr/1/,             ],
     ];       
   
     for my $pref ( [1,1], [0,1], [0,0] ) {
-        local $IPC::Cmd::USE_IPC_RUN    = $pref->[0];
-        local $IPC::Cmd::USE_IPC_OPEN3  = $pref->[1];
+        $IPC::Cmd::USE_IPC_RUN    = $IPC::Cmd::USE_IPC_RUN      = $pref->[0];
+        $IPC::Cmd::USE_IPC_OPEN3  = $IPC::Cmd::USE_IPC_OPEN3    = $pref->[1];
 
         for my $aref ( @$map ) {
             my $cmd     = $aref->[0];
@@ -47,13 +47,11 @@ local $IPC::Cmd::VERBOSE = $ARGV[0] ? 1 : 0;
         
             SKIP: {
                 skip "No buffers returned", 1 unless $captured;
-                like( $captured, $regex,      q[  Buffer filled] );
+                like( $captured, $regex,      q[   Buffer filled] );
         
                 ### if we get here, we have buffers ###
                 $Can_Buffer++;
             }
-        
-        
 
             my @list = run( command => $cmd );
             ok( $list[0],       "Command ran succesfully" );

@@ -19,7 +19,7 @@ BEGIN {
                         $USE_IPC_RUN $USE_IPC_OPEN3
                     ];
 
-    $VERSION        = '0.20';
+    $VERSION        = '0.22';
     $VERBOSE        = 0;
     $USE_IPC_RUN    = 1;
     $USE_IPC_OPEN3  = 1;
@@ -69,8 +69,9 @@ sub run {
     my $is_win98    = ($^O eq 'MSWin32' and !Win32::IsWinNT());
 
     my $err;                # error flag
-    my $have_buffer;        # to indicate we executed via IPC::Run or IPC::Open3
-                            # only then it makes sence to return the buffers
+    my $have_buffer;        # to indicate we executed via IPC::Run 
+                            # or IPC::Open3 only then it makes sence 
+                            # to return the buffers
 
     my (@buffer,@buferr,@bufout);
 
@@ -128,32 +129,45 @@ sub run {
         #     ['/usr/bin/tar', '-tf -']
         # ]
 
-        my @command;
+        my @command; my $special_chars;
         if( ref $cmd ) {
             my $aref = [];
             for my $item (@cmd) {
                 if( $item =~ /[<>|&]/ ) {
                     push @command, $aref, $item;
                     $aref = [];                  
+                    $special_chars++;
                 } else {
                     push @$aref, $item;
                 }
             }            
             push @command, $aref;
         } else {
-            @command = map { /[<>|&]/
-                                ? $_
-                                : [ split / +/ ]
+            @command = map { if( /[<>|&]/ ) {
+                                $special_chars++; $_;
+                             } else {                            
+                                [ split / +/ ]
+                             }
                         } split( /\s*([<>|&])\s*/, $cmd );
         }
         
-        ### XXX DO NOT RELEASE ME!!!
         ### due to the double '>' construct, stdout buffers are now ending
         ### up in the stderr buffer. this is a bug in IPC::Run.
         ### Mailed barries about this early june, no solution yet :(
-        IPC::Run::run(@command, \*STDIN, '>', $_out_handler, 
-                                         '>', $_err_handler) or $err++;
-        
+        ### update (23-6-04): so this thing with the double > makes
+        ### this command not even fill any buffer:
+        ###     perl -lewarn$$
+        ### so it looks like when there are no 'special' chars in the
+        ### command, like '|' and friends, best not use the '>' construct.
+        if( $special_chars ) {              
+            IPC::Run::run(@command, \*STDIN, '>', $_out_handler, 
+                                             '>', $_err_handler) or $err++;
+        } else {
+            IPC::Run::run(@command, \*STDIN, $_out_handler, 
+                                         $_err_handler) or $err++;
+        }
+ 
+ 
     ### Next, IPC::Open3 is know to fail on Win32, but works on Un*x.
     } elsif (   $^O !~ /^(?:MSWin32|cygwin)$/
                 and $USE_IPC_OPEN3
@@ -196,7 +210,7 @@ sub run {
 
     ### unless $err has been set from _open3_run, set it to $? ###
     $err ||= $?;
-    
+
     if ( scalar @buffer ) {
         my $capture = $args->{buffer};
         $$capture = join '', @buffer;
@@ -520,7 +534,8 @@ however, since you can just inspect your buffers for the contents.
 Due to a bug in C<IPC::Run> versions upto and including the latest one
 at the time of writing (0.78), C<run()> calls executed via C<IPC::Run>
 will not be able to differentiate between C<STDOUT> and C<STDERR> 
-output; All output will be caught in the C<STDERR> buffer.
+output when C<special characters> are present in the command (like 
+<,>,| and &); All output will be caught in the C<STDERR> buffer.
 
 Note that this is only a problem if you use the long output of C<run()>
 and not if you provide the C<buffer> option to the command.
