@@ -10,15 +10,22 @@ use Config;
 
 use strict;
 
+require Carp;
+$Carp::CarpLevel = 1;
+
 BEGIN {
     use Exporter    ();
-    use vars        qw[ @ISA $VERSION @EXPORT_OK $VERBOSE];
+    use vars        qw[ @ISA $VERSION @EXPORT_OK $VERBOSE
+                        $USE_IPC_RUN $USE_IPC_OPEN3
+                    ];
 
-    $VERSION    =   0.04;
-    $VERBOSE    =   0;
+    $VERSION        = '0.20';
+    $VERBOSE        = 0;
+    $USE_IPC_RUN    = 1;
+    $USE_IPC_OPEN3  = 1;
 
-    @ISA        =   qw[ Exporter ];
-    @EXPORT_OK  =   qw[can_run run];
+    @ISA            = qw[Exporter];
+    @EXPORT_OK      = qw[can_run run];
 }
 
 ### check if we can run some command ###
@@ -46,17 +53,14 @@ sub run {
     my $tmpl = {
         verbose => { default    => $VERBOSE },
         command => { required   => 1,
-                     allow      => sub {!(ref $_[1]) or ref $_[1] eq 'ARRAY' }
+                     allow      => sub {my $cmd = pop();
+                                        !(ref $cmd) or ref $cmd eq 'ARRAY' }
                    },
         buffer  => { default => \$x },             
     };
 
     my $args = check( $tmpl, \%hash, $VERBOSE )
                 or ( warn(loc(q[Could not validate input!])), return );
-
-
-    
-
 
     ### Kludge! This enables autoflushing for each perl process we launched.
     local $ENV{PERL5OPT} .= ' -MIPC::Cmd::System=autoflush=1';
@@ -72,6 +76,7 @@ sub run {
 
     ### STDOUT message handler
     my $_out_handler = sub {
+    #sub _out_handler {
         my $buf = shift;
         return unless defined $buf;
 
@@ -82,6 +87,7 @@ sub run {
 
     ### STDERR message handler
     my $_err_handler = sub {
+    #sub _err_handler {
         my $buf = shift;
         return unless defined $buf;
 
@@ -96,26 +102,64 @@ sub run {
     print loc(qq|Running [%1]...\n|,"@cmd") if $verbose;
 
     ### First, we prefer Barrie Slaymaker's wonderful IPC::Run module.
-    if (!$is_win98 and can_load(
-                            modules => { 'IPC::Run' => '0.55' },
-                            verbose => $verbose && ($^O eq 'MSWin32'),
-    ) ) {
+    if (!$is_win98 and $USE_IPC_RUN and 
+        can_load(
+            modules => { 'IPC::Run' => '0.55' },
+            verbose => $verbose && ($^O eq 'MSWin32') ) 
+    ) {
         STDOUT->autoflush(1); STDERR->autoflush(1);
 
         $have_buffer++;
 
-        @cmd = ref($cmd) ? ( [ @cmd ] )
-                         : map { /[<>|&]/
-                                    ? $_
-                                    : [ split / +/ ]
-                               } split( /\s*([<>|&])\s*/, $cmd );
+        ### a command like:
+        # [
+        #     '/usr/bin/gzip',
+        #     '-cdf',
+        #     '/Users/kane/sources/p4/other/archive-extract/t/src/x.tgz',
+        #     '|',
+        #     '/usr/bin/tar',
+        #     '-tf -'
+        # ]
+        ### needs to become:
+        # [
+        #     ['/usr/bin/gzip', '-cdf',
+        #       '/Users/kane/sources/p4/other/archive-extract/t/src/x.tgz']
+        #     '|',
+        #     ['/usr/bin/tar', '-tf -']
+        # ]
+
+        my @command;
+        if( ref $cmd ) {
+            my $aref = [];
+            for my $item (@cmd) {
+                if( $item =~ /[<>|&]/ ) {
+                    push @command, $aref, $item;
+                    $aref = [];                  
+                } else {
+                    push @$aref, $item;
+                }
+            }            
+            push @command, $aref;
+        } else {
+            @command = map { /[<>|&]/
+                                ? $_
+                                : [ split / +/ ]
+                        } split( /\s*([<>|&])\s*/, $cmd );
+        }
         
-        IPC::Run::run(@cmd, \*STDIN, $_out_handler, $_err_handler) or $err++;
+        ### XXX DO NOT RELEASE ME!!!
+        ### due to the double '>' construct, stdout buffers are now ending
+        ### up in the stderr buffer. this is a bug in IPC::Run.
+        ### Mailed barries about this early june, no solution yet :(
+        IPC::Run::run(@command, \*STDIN, '>', $_out_handler, 
+                                         '>', $_err_handler) or $err++;
         
     ### Next, IPC::Open3 is know to fail on Win32, but works on Un*x.
     } elsif (   $^O !~ /^(?:MSWin32|cygwin)$/
+                and $USE_IPC_OPEN3
                 and can_load(
-                    modules => { map{$_ => '0.0'} qw|IPC::Open3 IO::Select Symbol| },
+                    modules => { map{$_ => '0.0'} 
+                                qw|IPC::Open3 IO::Select Symbol| },
                     verbose => $verbose
     ) ) {
         my $rv;
@@ -169,7 +213,10 @@ sub run {
 ### IPC::Run::run emulator, using IPC::Open3.
 sub _open3_run {
     my ($cmdref, $_out_handler, $_err_handler, $verbose) = @_;
-    my @cmd = @$cmdref;
+    
+    ### in case there are pipes in there;
+    ### IPC::Open3 will call exec and exec will do the right thing ###
+    my $cmd = join " ", @$cmdref;
 
     ### Following code are adapted from Friar 'abstracts' in the
     ### Perl Monastery (http://www.perlmonks.org/index.pl?node_id=151886).
@@ -181,7 +228,7 @@ sub _open3_run {
             $infh   = Symbol::gensym(),
             $outfh  = Symbol::gensym(),
             $errfh  = Symbol::gensym(),
-            @cmd,
+            $cmd,
         )
     };
 
@@ -246,7 +293,11 @@ IPC::Cmd - finding and running system commands made easy
     my $cmd = [$full_path, '-b', 'theregister.co.uk'];
 
     ### in scalar context ###
-    if( run(command => $cmd, verbose => 0) ) {
+    my $buffer;
+    if( scalar run( command => $cmd, 
+                    verbose => 0,
+                    buffer  => \$buffer ) 
+    ) {
         print "fetched webpage succesfully\n";
     }
 
@@ -291,15 +342,18 @@ found, or C<undef> if it was not.
 
 =head2 run
 
-C<run> takes 2 arguments:
+C<run> takes 3 arguments:
 
 =over 4
 
 =item command
 
 This is the command to execute. It may be either a string or an array
-reference.
+reference. 
 This is a required argument.
+
+See L<CAVEATS> for remarks on how commands are parsed and their 
+limitations.
 
 =item verbose
 
@@ -310,6 +364,18 @@ C<IPC::Open3>).
 
 It will default to the global setting of C<$IPC::Cmd::VERBOSE>,
 which by default is 0.
+
+=item buffer
+
+This will hold all the output of a command. It needs to be a reference
+to a scalar.
+Note that this will hold both the STDOUT and STDERR messages, and you
+have no way of telling which is which.
+If you require this distinciton, run the C<run> command in list context
+and inspect the individual buffers.
+
+Of course, this requires that the underlying call supports buffers. See
+the note on buffers right above.
 
 =back
 
@@ -397,6 +463,74 @@ global variables:
 This controls whether IPC::Cmd will print any output from the
 commands to the screen or not. The default is 0;
 
+=head2 $IPC::Cmd::USE_IPC_RUN
+
+This variable controls whether IPC::Cmd will try to use L<IPC::Run> 
+when available and suitable. Defaults to true.
+
+=head2 $IPC::Cmd::USE_IPC_OPEN3
+
+This variable controls whether IPC::Cmd will try to use L<IPC::Open3>
+when available and suitable. Defautls to true.
+
+=head2 Caveats
+
+=over 4
+
+=item Whitespace
+
+When you provide a string as this argument, the string will be
+split on whitespace to determine the individual elements of your 
+command. Although this will usually just Do What You Mean, it may
+break if you have files or commands with whitespace in them. 
+
+If you do not wish this to happen, you should provide an array 
+reference, where all parts of your command are already seperated out.
+Note however, if there's extra or spurious whitespace in these parts,
+the parser or underlying code may not interpret it correctly, and
+cause an error.
+
+Example:
+The following code
+    
+    gzip -cdf foo.tar.gz | tar -xf -
+    
+should either be passed as
+
+    "gzip -cdf foo.tar.gz | tar -xf -"
+
+or as
+
+    ['gzip', '-cdf', 'foo.tar.gz', '|', 'tar', '-xf', '-']
+    
+But take care not to pass it as, for example
+    
+    ['gzip -cdf foo.tar.gz', '|', 'tar -xf -']            
+
+Since this will lead to issues as described above.
+
+=item IO Redirect
+
+Currently it is too complicated to parse your command for IO 
+Redirections. For capturing STDOUT or STDERR there is a work around
+however, since you can just inspect your buffers for the contents.
+
+=item IPC::Run buffer capture bug
+
+Due to a bug in C<IPC::Run> versions upto and including the latest one
+at the time of writing (0.78), C<run()> calls executed via C<IPC::Run>
+will not be able to differentiate between C<STDOUT> and C<STDERR> 
+output; All output will be caught in the C<STDERR> buffer.
+
+Note that this is only a problem if you use the long output of C<run()>
+and not if you provide the C<buffer> option to the command.
+
+If this limitation is not acceptable to you, consider setting the 
+global variable C<$IPC::Cmd::USE_IPC_RUN> to false.
+
+
+=back
+
 =head1 See Also
 
 C<IPC::Run>, C<IPC::Open3>
@@ -409,7 +543,7 @@ Jos Boumans E<lt>kane@cpan.orgE<gt>.
 =head1 COPYRIGHT
 
 This module is
-copyright (c) 2002 Jos Boumans E<lt>kane@cpan.orgE<gt>.
+copyright (c) 2002,2003,2004 Jos Boumans E<lt>kane@cpan.orgE<gt>.
 All rights reserved.
 
 This library is free software;
