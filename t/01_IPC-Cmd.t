@@ -32,9 +32,9 @@ $IPC::Cmd::VERBOSE = $IPC::Cmd::VERBOSE = $ARGV[0] ? 1 : 0;
         ["$^X -eprint1 | $^X -neprint",             qr/1/,             ],
         [[$^X,qw[-eprint1 |], $^X, qw|-neprint|],   qr/1/,             ],
     ];
-  
+
     my @prefs = ( [1,1], [0,1], [0,0] );
-    
+
     ### if IPC::Run is already loaded,remove tests involving IPC::Run
     ### when on win32
     shift @prefs if $Skip_IPC_Run;
@@ -74,7 +74,7 @@ $IPC::Cmd::VERBOSE = $IPC::Cmd::VERBOSE = $ARGV[0] ? 1 : 0;
                 ok( (grep /$regex/, @{$list[2]}),
                                     "   Out buffer filled" );
                 SKIP: {
-                    skip "IPC::Run bug prevents seperated " .
+                    skip "IPC::Run bug prevents separated " .
                             "stdout/stderr buffers", 2 if $pref->[0];
 
                     ok( (grep /$regex/, @{$list[3]}),
