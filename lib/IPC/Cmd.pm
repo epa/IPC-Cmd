@@ -13,7 +13,7 @@ BEGIN {
                         $USE_IPC_RUN $USE_IPC_OPEN3 $WARN
                     ];
 
-    $VERSION        = '0.34';
+    $VERSION        = '0.36';
     $VERBOSE        = 0;
     $DEBUG          = 0;
     $WARN           = 1;
@@ -586,7 +586,10 @@ sub _system_run {
             my($redir, $fh, $glob) = @{$Map{$name}} or (
                 Carp::carp(loc("No such FD: '%1'", $name)), next );
             
-            open $glob, $redir,$fh or (
+            ### MUST use the 2-arg version of open for dup'ing for 
+            ### 5.6.x compatibilty. 5.8.x can use 3-arg open
+            ### see perldoc5.6.2 -f open for details            
+            open $glob, $redir . fileno($fh) or (
                         Carp::carp(loc("Could not dup '$name': %1", $!)),
                         return
                     );        
@@ -615,7 +618,10 @@ sub _system_run {
             my($redir, $fh, $glob) = @{$Map{$name}} or (
                 Carp::carp(loc("No such FD: '%1'", $name)), next );
 
-            open( $fh, $redir,$glob ) or (
+            ### MUST use the 2-arg version of open for dup'ing for 
+            ### 5.6.x compatibilty. 5.8.x can use 3-arg open
+            ### see perldoc5.6.2 -f open for details
+            open( $fh, $redir . fileno($glob) ) or (
                     Carp::carp(loc("Could not restore '$name': %1", $!)),
                     return
                 ); 
