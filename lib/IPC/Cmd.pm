@@ -14,7 +14,7 @@ BEGIN {
                         $USE_IPC_RUN $USE_IPC_OPEN3 $WARN
                     ];
 
-    $VERSION        = '0.41_02';
+    $VERSION        = '0.41_03';
     $VERBOSE        = 0;
     $DEBUG          = 0;
     $WARN           = 1;
@@ -264,13 +264,15 @@ In list context, you will be returned a list of the following items:
 A simple boolean indicating if the command executed without errors or
 not.
 
-=item errorcode
+=item error message
 
 If the first element of the return value (success) was 0, then some
-error occurred. This second element is the error code the command
-you requested exited with, if available. If the error was a timeout,
-the C<errorcode> will be set to an object of the C<IPC::Cmd::TimeOut> 
-class.
+error occurred. This second element is the error message the command
+you requested exited with, if available. This is generally a pretty 
+printed value of C<$?> or C<$@>. See C<perldoc perlvar> for details on 
+what they can contain.
+If the error was a timeout, the C<error message> will be prefixed with
+the string C<IPC::Cmd::TimeOut>, the timeout class.
 
 =item full_buffer
 
@@ -303,7 +305,22 @@ what modules or function calls to use when issuing a command.
 
 =cut
 
+{   my @acc = qw[ok error _fds];
+    
+    ### autogenerate accessors ###
+    for my $key ( @acc ) {
+        no strict 'refs';
+        *{__PACKAGE__."::$key"} = sub {
+            $_[0]->{$key} = $_[1] if @_ > 1;
+            return $_[0]->{$key};
+        }
+    }
+}
+
 sub run {
+    ### container to store things in
+    my $self = bless {}, __PACKAGE__;
+
     my %hash = @_;
     
     ### if the user didn't provide a buffer, we'll store it here.
@@ -320,14 +337,16 @@ sub run {
     };
     
     unless( check( $tmpl, \%hash, $VERBOSE ) ) {
-        Carp::carp(loc("Could not validate input: %1", Params::Check->last_error));
+        Carp::carp( loc( "Could not validate input: %1",
+                         Params::Check->last_error ) );
         return;
     };        
 
     ### strip any empty elements from $cmd if present
     $cmd = [ grep { length && defined } @$cmd ] if ref $cmd;
 
-    print loc("Running [%1]...\n", (ref $cmd ? "@$cmd" : $cmd)) if $verbose;
+    my $pp_cmd = (ref $cmd ? "@$cmd" : $cmd);
+    print loc("Running [%1]...\n", $pp_cmd ) if $verbose;
 
     ### did the user pass us a buffer to fill or not? if so, set this
     ### flag so we know what is expected of us
@@ -342,7 +361,7 @@ sub run {
     my $_out_handler = sub {
         my $buf = shift;
         return unless defined $buf;
-        
+       
         print STDOUT $buf if $verbose;
         push @buffer,   $buf;
         push @buff_out, $buf;
@@ -360,54 +379,70 @@ sub run {
     
 
     ### flag to indicate we have a buffer captured
-    my $have_buffer = __PACKAGE__->can_capture_buffer ? 1 : 0;
+    my $have_buffer = $self->can_capture_buffer ? 1 : 0;
     
     ### flag indicating if the subcall went ok
     my $ok;
     
+    ### dont look at previous errors:
+    local $?;  
+    local $@;
+    local $!;
+
     ### we might be having a timeout set
     eval {   
-        local $SIG{ALRM} = sub { die bless {}, ALARM_CLASS } if $timeout;
+        local $SIG{ALRM} = sub { die bless sub { 
+            ALARM_CLASS . 
+            qq[: Command '$pp_cmd' aborted by alarm after $timeout seconds]
+        }, ALARM_CLASS } if $timeout;
         alarm $timeout || 0;
     
         ### IPC::Run is first choice if $USE_IPC_RUN is set.
-        if( $USE_IPC_RUN and __PACKAGE__->can_use_ipc_run( 1 ) ) {
+        if( $USE_IPC_RUN and $self->can_use_ipc_run( 1 ) ) {
             ### ipc::run handlers needs the command as a string or an array ref
     
-            __PACKAGE__->_debug( "# Using IPC::Run. Have buffer: $have_buffer" )
+            $self->_debug( "# Using IPC::Run. Have buffer: $have_buffer" )
                 if $DEBUG;
                 
-            $ok = __PACKAGE__->_ipc_run( $cmd, $_out_handler, $_err_handler );
+            $ok = $self->_ipc_run( $cmd, $_out_handler, $_err_handler );
     
         ### since IPC::Open3 works on all platforms, and just fails on
         ### win32 for capturing buffers, do that ideally
-        } elsif ( $USE_IPC_OPEN3 and __PACKAGE__->can_use_ipc_open3( 1 ) ) {
+        } elsif ( $USE_IPC_OPEN3 and $self->can_use_ipc_open3( 1 ) ) {
     
-            __PACKAGE__->_debug("# Using IPC::Open3. Have buffer: $have_buffer")
+            $self->_debug("# Using IPC::Open3. Have buffer: $have_buffer")
                 if $DEBUG;
     
             ### in case there are pipes in there;
             ### IPC::Open3 will call exec and exec will do the right thing 
-            $ok = __PACKAGE__->_open3_run( 
+            $ok = $self->_open3_run( 
                                     $cmd, $_out_handler, $_err_handler, $verbose 
                                 );
             
         ### if we are allowed to run verbose, just dispatch the system command
         } else {
-            __PACKAGE__->_debug( "# Using system(). Have buffer: $have_buffer" )
+            $self->_debug( "# Using system(). Have buffer: $have_buffer" )
                 if $DEBUG;
-            $ok = __PACKAGE__->_system_run( 
-                                    (ref $cmd ? "@$cmd" : $cmd), $verbose 
-                                );
+            $ok = $self->_system_run( $cmd, $verbose );
         }
         
         alarm 0;
     };
+   
+    ### restore STDIN after duping, or STDIN will be closed for
+    ### this current perl process!   
+    $self->__reopen_fds( @{ $self->_fds} ) if $self->_fds;
     
-    my $err = $?;
-    if ( $@ and ref $@ and $@->isa( ALARM_CLASS ) ) {
-        $ok  = 0;
-        $err = $@;  # the error code is an expired alarm
+    my $err;
+    unless( $ok ) {
+        ### alarm happened
+        if ( $@ and ref $@ and $@->isa( ALARM_CLASS ) ) {
+            $err = $@->();  # the error code is an expired alarm
+
+        ### another error happened, set by the dispatch sub
+        } else {
+            $err = $self->error;
+        }
     }
     
     ### fill the buffer;
@@ -452,16 +487,26 @@ sub _open3_run {
                             ? qw[STDIN STDOUT STDERR] 
                             : qw[STDIN]
                         );
-    __PACKAGE__->__dup_fds( @fds_to_dup );
+    $self->_fds( \@fds_to_dup );
+    $self->__dup_fds( @fds_to_dup );
     
     ### dont stringify @$cmd, so spaces in filenames/paths are
     ### treated properly
-    my $pid = IPC::Open3::open3(
+    my $pid = eval { 
+        IPC::Open3::open3(
                     '<&STDIN',
                     (IS_WIN32 ? '>&STDOUT' : $kidout),
                     (IS_WIN32 ? '>&STDERR' : $kiderror),
                     ( ref $cmd ? @$cmd : $cmd ),
                 );
+    };
+    
+    ### open3 error occurred 
+    if( $@ and $@ =~ /^open3:/ ) {
+        $self->ok( 0 );
+        $self->error( $@ );
+        return;
+    };
 
     ### use OUR stdin, not $kidin. Somehow,
     ### we never get the input.. so jump through
@@ -494,7 +539,7 @@ sub _open3_run {
                 warn(loc("Error reading from process: %1", $!));
                 last OUTER;
             }
-            
+
             ### check for $len. it may be 0, at which point we're
             ### done reading, so don't try to process it.
             ### if we would print anyway, we'd provide bogus information
@@ -513,10 +558,17 @@ sub _open3_run {
 
     ### restore STDIN after duping, or STDIN will be closed for
     ### this current perl process!
-    __PACKAGE__->__reopen_fds( @fds_to_dup );
+    ### done in the parent call now
+    # $self->__reopen_fds( @fds_to_dup );
     
-    return if $?;   # some error occurred
-    return 1;
+    ### some error occurred
+    if( $? ) {
+        $self->error( $self->_pp_child_error( $cmd, $? ) );   
+        $self->ok( 0 );
+        return;
+    } else {
+        return $self->ok( 1 );
+    }
 }
 
 
@@ -588,14 +640,39 @@ sub _ipc_run {
     #         push @command, \*STDIN;
     #     }
   
- 
     # \*STDIN is already included in the @command, see a few lines up
-    return IPC::Run::run(   @command, 
+    my $ok = eval { IPC::Run::run(   @command, 
                             fileno(STDOUT).'>',
                             $_out_handler,
                             fileno(STDERR).'>',
                             $_err_handler
-                        );
+                        )
+                    };
+
+    ### all is well
+    if( $ok ) {
+        return $self->ok( $ok );
+
+    ### some error occurred
+    } else {
+        $self->ok( 0 );
+
+        ### if the eval fails due to an exception, deal with it
+        ### unless it's an alarm 
+        if( $@ and not UNIVERSAL::isa( $@, ALARM_CLASS ) ) {        
+            $self->error( $@ );
+
+        ### if it *is* an alarm, propagate        
+        } elsif( $@ ) {
+            die $@;
+
+        ### some error in the sub command
+        } else {
+            $self->error( $self->_pp_child_error( $cmd, $? ) );
+        }
+
+        return;
+    }
 }
 
 sub _system_run { 
@@ -604,15 +681,21 @@ sub _system_run {
     my $verbose = shift || 0;
 
     my @fds_to_dup = $verbose ? () : qw[STDOUT STDERR];
-    __PACKAGE__->__dup_fds( @fds_to_dup );
-    
+    $self->_fds( \@fds_to_dup );
+    $self->__dup_fds( @fds_to_dup );
+
     ### system returns 'true' on failure -- the exit code of the cmd
-    system( $cmd );
-    
-    __PACKAGE__->__reopen_fds( @fds_to_dup );
-    
-    return if $?;
-    return 1;
+    $self->ok( 1 );
+    system( ref $cmd ? @$cmd : $cmd ) == 0 or do {
+        $self->error( $self->_pp_child_error( $cmd, $? ) );
+        $self->ok( 0 );
+    };
+
+    ### done in the parent call now
+    #$self->__reopen_fds( @fds_to_dup );
+
+    return unless $self->ok;
+    return $self->ok;
 }
 
 {   use File::Spec;
@@ -696,6 +779,34 @@ sub _debug {
     return 1;
 }
 
+sub _pp_child_error {
+    my $self    = shift;
+    my $cmd     = shift or return;
+    my $ce      = shift or return;
+    my $pp_cmd  = ref $cmd ? "@$cmd" : $cmd;
+    
+            
+    my $str;
+    if( $ce == -1 ) {
+        ### Include $! in the error message, so that the user can
+        ### see 'No such file or directory' versus 'Permission denied'
+        ### versus 'Cannot fork' or whatever the cause was.
+        $str = "Failed to execute '$pp_cmd': $!";
+
+    } elsif ( $ce & 127 ) {       
+        ### some signal
+        $str = loc( "'%1' died with signal %d, %s coredump\n",
+               $pp_cmd, ($ce & 127), ($ce & 128) ? 'with' : 'without');
+
+    } else {
+        ### Otherwise, the command run but gave error status.
+        $str = "'$pp_cmd' exited with value " . ($ce >> 8);
+    }
+  
+    $self->_debug( "# Child error '$ce' translated to: $str" ) if $DEBUG;
+    
+    return $str;
+}
 
 1;
 
@@ -806,6 +917,23 @@ Since this will lead to issues as described above.
 Currently it is too complicated to parse your command for IO
 Redirections. For capturing STDOUT or STDERR there is a work around
 however, since you can just inspect your buffers for the contents.
+
+=item Interleaving STDOUT/STDERR
+
+Neither IPC::Run nor IPC::Open3 can interleave STDOUT and STDERR. For short
+bursts of output from a program, ie this sample:
+
+    for ( 1..4 ) {
+        $_ % 2 ? print STDOUT $_ : print STDERR $_;
+    }
+
+IPC::[Run|Open3] will first read all of STDOUT, then all of STDERR, meaning 
+the output looks like 1 line on each, namely '13' on STDOUT and '24' on STDERR.
+
+It should have been 1, 2, 3, 4.
+
+This has been recorded in L<rt.cpan.org> as bug #37532: Unable to interleave
+STDOUT and STDERR
 
 =back
 
