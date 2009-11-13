@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               IPC-Cmd
-version:            0.50
+version:            0.52
 abstract:           A cross platform way of running (interactive) commandline programs.
 author:
     - Jos Boumans <kane[at]cpan.org>
@@ -11,6 +11,8 @@ configure_requires:
 build_requires:
     ExtUtils::MakeMaker:  0
 requires:
+    ExtUtils::MakeMaker:  0
+    File::Spec:           0
     Locale::Maketext::Simple:  0
     Module::Load::Conditional:  0
     Params::Check:        0.20
