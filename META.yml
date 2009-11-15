@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               IPC-Cmd
-version:            0.52
+version:            0.54
 abstract:           A cross platform way of running (interactive) commandline programs.
 author:
     - Jos Boumans <kane[at]cpan.org>
